@@ -102,12 +102,19 @@ def _determinism_debug_signature(
             param_sum += float(param.detach().float().sum().item())
             if param.grad is not None:
                 grad_sum += float(param.grad.detach().float().sum().item())
-    for state in optimizer.state.values():
-        if not isinstance(state, dict):
-            continue
-        for value in state.values():
-            if torch.is_tensor(value):
-                optimizer_state_sum += float(value.detach().float().sum().item())
+    optimizer_state = getattr(optimizer, "state", None)
+    if optimizer_state is not None:
+        if hasattr(optimizer_state, "items"):
+            state_values = (value for _, value in optimizer_state.items())
+        else:
+            state_values = (optimizer_state[key] for key in optimizer_state)
+        for state in state_values:
+            if isinstance(state, dict):
+                for value in state.values():
+                    if torch.is_tensor(value):
+                        optimizer_state_sum += float(value.detach().float().sum().item())
+            elif torch.is_tensor(state):
+                optimizer_state_sum += float(state.detach().float().sum().item())
     return param_sum, grad_sum, optimizer_state_sum, param_count
 
 
