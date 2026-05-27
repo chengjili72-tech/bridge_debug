@@ -21,6 +21,10 @@ DISTRIBUTED_ARGS="
 "
 
 mkdir -p ./logs
+export BRIDGE_DETERMINISM_DEBUG=${BRIDGE_DETERMINISM_DEBUG:-1}
+export BRIDGE_DETERMINISM_DEBUG_INTERVAL=${BRIDGE_DETERMINISM_DEBUG_INTERVAL:-1}
+# For sequence parallel path, keeping max connections to 1 improves scheduling stability.
+export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
 
 TP=4
 PP=1
