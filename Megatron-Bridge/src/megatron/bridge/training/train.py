@@ -84,6 +84,27 @@ from megatron.bridge.training.utils.train_utils import (
 from megatron.bridge.utils.common_utils import get_world_size_safe, print_rank_0
 
 
+def _determinism_debug_signature(
+    model: list[MegatronModule], optimizer: MegatronOptimizer
+) -> tuple[float, float, int]:
+    """Compute a lightweight deterministic signature for debugging.
+
+    Returns:
+        (parameter_sum_fp64, grad_sum_fp64, parameter_count)
+    """
+    param_sum = 0.0
+    grad_sum = 0.0
+    param_count = 0
+    for model_module in model:
+        for param in model_module.parameters():
+            param_count += param.numel()
+            param_sum += float(param.detach().float().sum().item())
+            if param.grad is not None:
+                grad_sum += float(param.grad.detach().float().sum().item())
+    _ = optimizer  # Keep signature extensible; optimizer is intentionally passed in.
+    return param_sum, grad_sum, param_count
+
+
 def train(
     forward_step_func: ForwardStepCallable,
     model: list[MegatronModule],
@@ -266,6 +287,13 @@ def train(
 
     start_iteration = global_state.train_state.step
     print_rank_0(f"Starting training loop at iteration {start_iteration}")
+    determinism_debug = os.getenv("BRIDGE_DETERMINISM_DEBUG", "0").lower() in {"1", "true", "on", "yes"}
+    determinism_debug_interval = int(os.getenv("BRIDGE_DETERMINISM_DEBUG_INTERVAL", "1"))
+    if determinism_debug:
+        print_rank_0(
+            "Determinism debug enabled: BRIDGE_DETERMINISM_DEBUG=1, "
+            f"interval={determinism_debug_interval}"
+        )
 
     if should_fire(callback_manager, "on_train_start"):
         callback_manager.fire(
@@ -497,6 +525,15 @@ def train(
             model,
             log_max_attention_logit,
         )
+        if determinism_debug and global_state.train_state.step % determinism_debug_interval == 0:
+            param_sum, grad_sum, param_count = _determinism_debug_signature(model, optimizer)
+            rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+            print(
+                "[DETERMINISM_DEBUG] "
+                f"rank={rank} iter={global_state.train_state.step} "
+                f"params={param_count} param_sum={param_sum:.10e} grad_sum={grad_sum:.10e}",
+                flush=True,
+            )
 
         if (
             global_state.train_state.do_valid
