@@ -86,14 +86,15 @@ from megatron.bridge.utils.common_utils import get_world_size_safe, print_rank_0
 
 def _determinism_debug_signature(
     model: list[MegatronModule], optimizer: MegatronOptimizer
-) -> tuple[float, float, int]:
+) -> tuple[float, float, float, int]:
     """Compute a lightweight deterministic signature for debugging.
 
     Returns:
-        (parameter_sum_fp64, grad_sum_fp64, parameter_count)
+        (parameter_sum_fp64, grad_sum_fp64, optimizer_state_sum_fp64, parameter_count)
     """
     param_sum = 0.0
     grad_sum = 0.0
+    optimizer_state_sum = 0.0
     param_count = 0
     for model_module in model:
         for param in model_module.parameters():
@@ -101,8 +102,13 @@ def _determinism_debug_signature(
             param_sum += float(param.detach().float().sum().item())
             if param.grad is not None:
                 grad_sum += float(param.grad.detach().float().sum().item())
-    _ = optimizer  # Keep signature extensible; optimizer is intentionally passed in.
-    return param_sum, grad_sum, param_count
+    for state in optimizer.state.values():
+        if not isinstance(state, dict):
+            continue
+        for value in state.values():
+            if torch.is_tensor(value):
+                optimizer_state_sum += float(value.detach().float().sum().item())
+    return param_sum, grad_sum, optimizer_state_sum, param_count
 
 
 def train(
@@ -526,12 +532,13 @@ def train(
             log_max_attention_logit,
         )
         if determinism_debug and global_state.train_state.step % determinism_debug_interval == 0:
-            param_sum, grad_sum, param_count = _determinism_debug_signature(model, optimizer)
+            param_sum, grad_sum, optimizer_state_sum, param_count = _determinism_debug_signature(model, optimizer)
             rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
             print(
                 "[DETERMINISM_DEBUG] "
                 f"rank={rank} iter={global_state.train_state.step} "
-                f"params={param_count} param_sum={param_sum:.10e} grad_sum={grad_sum:.10e}",
+                f"params={param_count} param_sum={param_sum:.10e} "
+                f"grad_sum={grad_sum:.10e} opt_sum={optimizer_state_sum:.10e}",
                 flush=True,
             )
 
